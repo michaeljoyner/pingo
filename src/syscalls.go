@@ -44,10 +44,9 @@ type gpioV2LineAttribute struct {
 
 type gpioV2LineConfig struct {
 	Flags    uint64
-	NumAttrs uint32
-	Padding  [5]byte
-	_        [3]byte
 	RawAttrs [80]byte
+	NumAttrs uint32
+	_        [8]byte // manual padding
 }
 
 func (cfg *gpioV2LineConfig) SetAttr(index int, attr gpioV2LineAttribute) {
@@ -60,14 +59,14 @@ func (cfg *gpioV2LineConfig) SetAttr(index int, attr gpioV2LineAttribute) {
 }
 
 type gpioV2LineRequest struct {
-	Offsets    [GPIOHANDLES_MAX]uint32
-	Consumer   [32]byte
-	Config     gpioV2LineConfig
-	NumLines   uint32
-	EventBufSz uint32
-	Padding    [5]byte
-	_          [3]byte
-	FD         int32
+	Offsets    [GPIOHANDLES_MAX]uint32 // 256
+	Consumer   [32]byte                // 32
+	Config     gpioV2LineConfig        // 100
+	NumLines   uint32                  // 4
+	EventBufSz uint32                  // 4
+	_          [8]byte                 // align
+	FD         int32                   // 4
+	_          [4]byte                 // optional padding
 }
 
 type gpioV2LineEvent struct {
