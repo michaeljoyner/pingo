@@ -131,6 +131,9 @@ func getLineValue(fd int) (uint8, error) {
 }
 
 func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (int, error) {
+	fmt.Println("gpioV2LineAttribute:", unsafe.Sizeof(gpioV2LineAttribute{})) // 8
+	fmt.Println("gpioV2LineConfig:", unsafe.Sizeof(gpioV2LineConfig{}))       // 100
+	fmt.Println("gpioV2LineRequest:", unsafe.Sizeof(gpioV2LineRequest{}))
 	var req gpioV2LineRequest
 	req.NumLines = 1
 	req.Offsets[0] = gpio
