@@ -43,11 +43,20 @@ type gpioV2LineAttribute struct {
 }
 
 type gpioV2LineConfig struct {
-	Flags      uint64
-	NumAttrs   uint32
-	Padding    [5]byte
-	_          [3]byte
-	Attributes [10]gpioV2LineAttribute
+	Flags    uint64
+	NumAttrs uint32
+	Padding  [5]byte
+	_        [3]byte
+	RawAttrs [80]byte
+}
+
+func (cfg *gpioV2LineConfig) SetAttr(index int, attr gpioV2LineAttribute) {
+	if index < 0 || index >= 10 {
+		panic("SetAttr index out of range")
+	}
+	offset := index * 8
+	binary.LittleEndian.PutUint32(cfg.RawAttrs[offset:], attr.ID)
+	binary.LittleEndian.PutUint32(cfg.RawAttrs[offset+4:], attr.Value)
 }
 
 type gpioV2LineRequest struct {
@@ -143,10 +152,6 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 
 	// Always set input flag using an attribute
 	req.Config.NumAttrs = 2
-	req.Config.Attributes[0] = gpioV2LineAttribute{
-		ID:    GPIO_V2_LINE_ATTR_ID_FLAGS,
-		Value: GPIO_V2_LINE_FLAG_INPUT,
-	}
 
 	// Set edge trigger type
 	var edgeValue uint32
@@ -161,10 +166,15 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
 
-	req.Config.Attributes[1] = gpioV2LineAttribute{
+	req.Config.SetAttr(0, gpioV2LineAttribute{
+		ID:    GPIO_V2_LINE_ATTR_ID_FLAGS,
+		Value: GPIO_V2_LINE_FLAG_INPUT,
+	})
+
+	req.Config.SetAttr(1, gpioV2LineAttribute{
 		ID:    GPIO_V2_LINE_ATTR_ID_EDGE,
 		Value: edgeValue,
-	}
+	})
 
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
