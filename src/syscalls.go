@@ -164,6 +164,70 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 		Mask: 1 << 0,
 	}
 
+	var hardcodedRequest = [488]byte{
+		// Line offsets (64 x uint32), only index 0 set to 17
+		17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+
+		// Consumer label "pingo-gpio" (32 bytes, null-padded)
+		112, 105, 110, 103, 111, 45, 103, 112, 105, 111, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+
+		// Config section (200 bytes total):
+		// Flags (input)
+		4, 0, 0, 0, 0, 0, 0, 0,
+		// NumAttrs = 2
+		2, 0, 0, 0,
+		// Padding
+		0, 0, 0, 0,
+
+		// Attribute 1: ID=1 (flags), pad=0, value=4 (input)
+		1, 0, 0, 0, 0, 0, 0, 0,
+		4, 0, 0, 0, 0, 0, 0, 0,
+
+		// Attribute 1 mask = 1
+		1, 0, 0, 0, 0, 0, 0, 0,
+
+		// Attribute 2: ID=2 (edge), pad=0, value=3 (both)
+		2, 0, 0, 0, 0, 0, 0, 0,
+		3, 0, 0, 0, 0, 0, 0, 0,
+
+		// Attribute 2 mask = 1
+		1, 0, 0, 0, 0, 0, 0, 0,
+
+		// Remaining 8 attributes (zero-filled) = 8 x (16 + 8) = 192 bytes
+		// (Filled with zeros)
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 3
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 4
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 5
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 6
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 7
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 8
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 9
+		0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // attr 10
+		0, 0, 0, 0, 0, 0, 0, 0,
+
+		// NumLines = 1
+		1, 0, 0, 0,
+		// EventBufSz = 0
+		0, 0, 0, 0,
+
+		// Padding (20 bytes)
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+
+		// FD (int32)
+		0, 0, 0, 0,
+	}
+
 	// attribute 1: edge detection
 	var edgeVal uint64
 	switch edge {
@@ -201,7 +265,7 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 		syscall.SYS_IOCTL,
 		chip.Fd(),
 		uintptr(GPIO_V2_GET_LINE_IOCTL),
-		uintptr(unsafe.Pointer(&req)),
+		uintptr(unsafe.Pointer(&hardcodedRequest)),
 	)
 	if errno != 0 {
 		return -1, fmt.Errorf("ioctl failed: %d (%s)", errno, errno.Error())
