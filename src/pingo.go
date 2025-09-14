@@ -10,9 +10,9 @@ const (
 	INPUT  = GPIOHANDLE_REQUEST_INPUT
 	OUTPUT = GPIOHANDLE_REQUEST_OUTPUT
 
-	EDGE_RISING  = 1
-	EDGE_FALLING = 2
-	EDGE_BOTH    = 3
+	EDGE_RISING  = uint8(1)
+	EDGE_FALLING = uint8(2)
+	EDGE_BOTH    = uint8(3)
 )
 
 type Device struct {
