@@ -17,6 +17,7 @@ func main() {
 
 	irq, err := dev.ReqIRQ(17, pingo.EDGE_BOTH)
 	if err != nil {
+		fmt.Printf("%v\n", dev)
 		log.Fatal(err)
 	}
 
