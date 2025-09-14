@@ -42,6 +42,40 @@ type gpioV2LineAttribute struct {
 	Value uint32
 }
 
+func buildLineConfigBuffer(attrs []gpioV2LineAttribute) ([]byte, error) {
+	const size = 100
+	buf := make([]byte, size)
+
+	// Example Flags: input flag must be set somewhere else
+
+	// Flags field - 8 bytes at offset 0
+	var flags uint64 = 0 // set flags later
+	binary.LittleEndian.PutUint64(buf[0:], flags)
+
+	// NumAttrs field - 4 bytes at offset 8
+	numAttrs := uint32(len(attrs))
+	binary.LittleEndian.PutUint32(buf[8:], numAttrs)
+
+	// Padding 4 bytes at offset 12 - zero
+	for i := 12; i < 16; i++ {
+		buf[i] = 0
+	}
+
+	// Attributes: 10 * 8 bytes starting at offset 16
+	for i, attr := range attrs {
+		if i >= 10 {
+			return nil, fmt.Errorf("too many attributes, max 10")
+		}
+		offset := 16 + i*8
+		binary.LittleEndian.PutUint32(buf[offset:], attr.ID)
+		binary.LittleEndian.PutUint32(buf[offset+4:], attr.Value)
+	}
+
+	// Zero remaining bytes (if any) after attributes - buffer is already zero initialized
+
+	return buf, nil
+}
+
 type gpioV2LineConfig struct {
 	Flags    uint64
 	RawAttrs [80]byte
@@ -59,14 +93,13 @@ func (cfg *gpioV2LineConfig) SetAttr(index int, attr gpioV2LineAttribute) {
 }
 
 type gpioV2LineRequest struct {
-	Offsets    [GPIOHANDLES_MAX]uint32 // 256
-	Consumer   [32]byte                // 32
-	Config     gpioV2LineConfig        // 100
-	NumLines   uint32                  // 4
-	EventBufSz uint32                  // 4
-	_          [8]byte                 // align
-	FD         int32                   // 4
-	_          [4]byte                 // optional padding
+	Offsets    [GPIOHANDLES_MAX]uint32
+	Consumer   [32]byte
+	ConfigBuf  [100]byte // raw serialized gpioV2LineConfig
+	NumLines   uint32
+	EventBufSz uint32
+	Padding    [8]byte // to ensure proper alignment
+	FD         int32
 }
 
 type gpioV2LineEvent struct {
@@ -145,36 +178,47 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	fmt.Println("gpioV2LineConfig:", unsafe.Sizeof(gpioV2LineConfig{}))       // 100
 	fmt.Println("gpioV2LineRequest:", unsafe.Sizeof(gpioV2LineRequest{}))
 	var req gpioV2LineRequest
+
 	req.NumLines = 1
 	req.Offsets[0] = gpio
 	copy(req.Consumer[:], []byte(name))
 
-	// Always set input flag using an attribute
-	req.Config.NumAttrs = 2
+	// Prepare attributes slice
+	attrs := []gpioV2LineAttribute{
+		{ID: GPIO_V2_LINE_ATTR_ID_FLAGS, Value: GPIO_V2_LINE_FLAG_INPUT},
+	}
 
-	// Set edge trigger type
-	var edgeValue uint32
+	var edgeVal uint32
 	switch edge {
 	case 1:
-		edgeValue = GPIO_V2_LINE_EDGE_RISING
+		edgeVal = GPIO_V2_LINE_EDGE_RISING
 	case 2:
-		edgeValue = GPIO_V2_LINE_EDGE_FALLING
+		edgeVal = GPIO_V2_LINE_EDGE_FALLING
 	case 3:
-		edgeValue = GPIO_V2_LINE_EDGE_BOTH
+		edgeVal = GPIO_V2_LINE_EDGE_BOTH
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
 
-	req.Config.SetAttr(0, gpioV2LineAttribute{
-		ID:    GPIO_V2_LINE_ATTR_ID_FLAGS,
-		Value: GPIO_V2_LINE_FLAG_INPUT,
-	})
-
-	req.Config.SetAttr(1, gpioV2LineAttribute{
+	attrs = append(attrs, gpioV2LineAttribute{
 		ID:    GPIO_V2_LINE_ATTR_ID_EDGE,
-		Value: edgeValue,
+		Value: edgeVal,
 	})
 
+	configBuf, err := buildLineConfigBuffer(attrs)
+	if err != nil {
+		return -1, err
+	}
+	copy(req.ConfigBuf[:], configBuf)
+
+	req.EventBufSz = 0 // set to 0 unless you want event buffering
+
+	// Zero padding for safety
+	for i := range req.Padding {
+		req.Padding[i] = 0
+	}
+
+	// Now call ioctl with pointer to req
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		chip.Fd(),
