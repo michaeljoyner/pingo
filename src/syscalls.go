@@ -45,7 +45,7 @@ type gpioV2LineAttribute struct {
 type gpioV2LineConfig struct {
 	Flags      uint64
 	NumAttrs   uint32
-	Padding    [4]byte
+	Padding    [5]byte
 	Attributes [10]gpioV2LineAttribute
 }
 
@@ -55,7 +55,7 @@ type gpioV2LineRequest struct {
 	Config     gpioV2LineConfig
 	NumLines   uint32
 	EventBufSz uint32
-	Padding    [4]byte
+	Padding    [5]byte
 	FD         int32
 }
 
@@ -135,17 +135,30 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	req.NumLines = 1
 	req.Offsets[0] = gpio
 	copy(req.Consumer[:], []byte(name))
-	req.Config.Flags = GPIO_V2_LINE_FLAG_INPUT
 
+	// Always set input flag using an attribute
+	req.Config.NumAttrs = 2
+	req.Config.Attributes[0] = gpioV2LineAttribute{
+		ID:    GPIO_V2_LINE_ATTR_ID_FLAGS,
+		Value: GPIO_V2_LINE_FLAG_INPUT,
+	}
+
+	// Set edge trigger type
+	var edgeValue uint32
 	switch edge {
 	case 1:
-		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_RISING
+		edgeValue = GPIO_V2_LINE_EDGE_RISING
 	case 2:
-		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_FALLING
+		edgeValue = GPIO_V2_LINE_EDGE_FALLING
 	case 3:
-		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING
+		edgeValue = GPIO_V2_LINE_EDGE_BOTH
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
+	}
+
+	req.Config.Attributes[1] = gpioV2LineAttribute{
+		ID:    GPIO_V2_LINE_ATTR_ID_EDGE,
+		Value: edgeValue,
 	}
 
 	_, _, errno := syscall.Syscall(
@@ -156,7 +169,7 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	)
 
 	if errno != 0 {
-		return -1, fmt.Errorf("ioctl event request failed: %v", errno)
+		return -1, fmt.Errorf("ioctl event request failed: %d (%s)", errno, errno.Error())
 	}
 
 	return int(req.FD), nil
@@ -178,3 +191,4 @@ func waitForInterrupt(file *os.File) (uint8, error) {
 		return 3, nil
 	}
 }
+
