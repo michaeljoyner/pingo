@@ -38,26 +38,31 @@ type GPIOEventData struct {
 }
 
 type gpioV2LineAttribute struct {
-	ID    uint32
-	_     uint32 // padding to align Value to 8 bytes
-	Value uint64
+	ID      uint32
+	padding uint32 // must be zero
+	Value   uint64
+}
+
+type gpioV2LineConfigAttribute struct {
+	Attr gpioV2LineAttribute
+	Mask uint64
 }
 
 type gpioV2LineConfig struct {
 	Flags    uint64
 	NumAttrs uint32
-	_        uint32 // padding
-	Attrs    [10]gpioV2LineAttribute
+	_        [5]uint32 // padding[5]
+	Attrs    [GPIO_V2_LINE_NUM_ATTRS_MAX]gpioV2LineConfigAttribute
 }
 
 type gpioV2LineRequest struct {
-	Offsets      [GPIOHANDLES_MAX]uint32
-	Consumer     [32]byte
-	Config       gpioV2LineConfig
-	NumLines     uint32
-	EventBufSize uint32
-	_            uint64 // padding for alignment
-	FD           int32
+	Offsets         [GPIO_V2_LINES_MAX]uint32
+	Consumer        [GPIO_MAX_NAME_SIZE]byte
+	Config          gpioV2LineConfig
+	NumLines        uint32
+	EventBufferSize uint32
+	padding         [5]uint32
+	FD              int32
 }
 
 type gpioV2LineEvent struct {
@@ -134,54 +139,72 @@ func getLineValue(fd int) (uint8, error) {
 func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (int, error) {
 	var req gpioV2LineRequest
 
+	// Clear everything initially (zero-initialized by Go on var declaration)
+
 	req.Offsets[0] = gpio
 	req.NumLines = 1
 
 	copy(req.Consumer[:], name)
-
-	// Attribute 0: Input flag
-	req.Config.Attrs[0] = gpioV2LineAttribute{
-		ID:    GPIO_V2_LINE_ATTR_ID_FLAGS,
-		Value: GPIO_V2_LINE_FLAG_INPUT,
+	if len(name) < len(req.Consumer) {
+		req.Consumer[len(name)] = 0
 	}
 
-	// Attribute 1: Edge flag
-	var edgeValue uint64
+	// Set configuration flags
+	req.Config.Flags = GPIO_V2_LINE_FLAG_INPUT
+
+	// Prepare attributes
+	// attribute 0: flags input
+	req.Config.Attrs[0] = gpioV2LineConfigAttribute{
+		Attr: gpioV2LineAttribute{
+			ID:      GPIO_V2_LINE_ATTR_ID_FLAGS,
+			padding: 0,
+			Value:   uint64(GPIO_V2_LINE_FLAG_INPUT),
+		},
+		// Mask: for line index 0
+		Mask: 1 << 0,
+	}
+
+	// attribute 1: edge detection
+	var edgeVal uint64
 	switch edge {
 	case 1:
-		edgeValue = GPIO_V2_LINE_EDGE_RISING
+		edgeVal = GPIO_V2_LINE_EDGE_RISING
 	case 2:
-		edgeValue = GPIO_V2_LINE_EDGE_FALLING
+		edgeVal = GPIO_V2_LINE_EDGE_FALLING
 	case 3:
-		edgeValue = GPIO_V2_LINE_EDGE_BOTH
+		edgeVal = GPIO_V2_LINE_EDGE_BOTH
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
 
-	req.Config.Attrs[1] = gpioV2LineAttribute{
-		ID:    GPIO_V2_LINE_ATTR_ID_EDGE,
-		Value: edgeValue,
+	req.Config.Attrs[1] = gpioV2LineConfigAttribute{
+		Attr: gpioV2LineAttribute{
+			ID:      GPIO_V2_LINE_ATTR_ID_EDGE,
+			padding: 0,
+			Value:   edgeVal,
+		},
+		Mask: 1 << 0,
 	}
 
 	req.Config.NumAttrs = 2
-	req.Config.Flags = 0
-	req.EventBufSize = 0 // Optional: 0 means no kernel-side buffering
 
-	// Debug: print struct sizes to verify alignment
-	fmt.Println("sizeof gpioV2LineRequest:", unsafe.Sizeof(req))                   // should be 504
-	fmt.Println("sizeof gpioV2LineConfig:", unsafe.Sizeof(req.Config))             // should be 176
-	fmt.Println("sizeof gpioV2LineAttribute:", unsafe.Sizeof(req.Config.Attrs[0])) // should be 16
+	req.EventBufferSize = 0 // or pass a non-zero if you want
 
-	// Perform ioctl call
+	// Debug: check sizes
+	fmt.Println("sizeof gpioV2LineAttribute:", unsafe.Sizeof(gpioV2LineAttribute{}))             // should be 16
+	fmt.Println("sizeof gpioV2LineConfigAttribute:", unsafe.Sizeof(gpioV2LineConfigAttribute{})) // should be 24
+	fmt.Println("sizeof gpioV2LineConfig:", unsafe.Sizeof(gpioV2LineConfig{}))                   // should be 272
+	fmt.Println("sizeof gpioV2LineRequest:", unsafe.Sizeof(req))                                 // should be 592
+
+	// Perform the ioctl
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		chip.Fd(),
 		uintptr(GPIO_V2_GET_LINE_IOCTL),
 		uintptr(unsafe.Pointer(&req)),
 	)
-
 	if errno != 0 {
-		return -1, fmt.Errorf("ioctl event request failed: %d (%s)", errno, errno.Error())
+		return -1, fmt.Errorf("ioctl failed: %d (%s)", errno, errno.Error())
 	}
 
 	return int(req.FD), nil
