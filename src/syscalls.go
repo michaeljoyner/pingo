@@ -46,6 +46,7 @@ type gpioV2LineConfig struct {
 	Flags      uint64
 	NumAttrs   uint32
 	Padding    [5]byte
+	_          [3]byte
 	Attributes [10]gpioV2LineAttribute
 }
 
@@ -56,6 +57,7 @@ type gpioV2LineRequest struct {
 	NumLines   uint32
 	EventBufSz uint32
 	Padding    [5]byte
+	_          [3]byte
 	FD         int32
 }
 
