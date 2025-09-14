@@ -42,6 +42,11 @@ type gpioV2LineAttribute struct {
 	Value uint32
 }
 
+type gpioV2LineAttributeV2 struct {
+	ID    uint32
+	Value uint32
+}
+
 func buildLineConfigBuffer(attrs []gpioV2LineAttribute) ([]byte, error) {
 	const size = 100
 	buf := make([]byte, size)
@@ -69,20 +74,40 @@ func buildLineConfigBuffer(attrs []gpioV2LineAttribute) ([]byte, error) {
 	return buf, nil
 }
 
-type gpioV2LineConfig struct {
-	Flags    uint64
-	RawAttrs [80]byte
-	NumAttrs uint32
-	_        [8]byte // manual padding
-}
+func buildLineConfigBufferV2(attrs []gpioV2LineAttributeV2) ([]byte, error) {
+	// Total size of struct gpio_v2_line_config
+	const configSize = 8 + 4 + 20 + GPIO_V2_LINE_NUM_ATTRS_MAX*24
+	buf := make([]byte, configSize)
 
-func (cfg *gpioV2LineConfig) SetAttr(index int, attr gpioV2LineAttribute) {
-	if index < 0 || index >= 10 {
-		panic("SetAttr index out of range")
+	// 0..7: flags (u64)
+	var flags uint64 = GPIO_V2_LINE_FLAG_INPUT
+	binary.LittleEndian.PutUint64(buf[0:], flags)
+
+	// 8..11: num_attrs (u32)
+	numAttrs := uint32(len(attrs))
+	if numAttrs > GPIO_V2_LINE_NUM_ATTRS_MAX {
+		return nil, fmt.Errorf("too many attributes: %d", numAttrs)
 	}
-	offset := index * 8
-	binary.LittleEndian.PutUint32(cfg.RawAttrs[offset:], attr.ID)
-	binary.LittleEndian.PutUint32(cfg.RawAttrs[offset+4:], attr.Value)
+	binary.LittleEndian.PutUint32(buf[8:], numAttrs)
+
+	// 12..31: padding[5] (5 × u32) → 20 bytes => already zero via make
+
+	// Attributes start at offset 32
+	for i, attr := range attrs {
+		base := 32 + i*24
+		// attr.id, 4 bytes
+		binary.LittleEndian.PutUint32(buf[base+0:], attr.ID)
+		// padding, 4 bytes at base+4 -> leave 0
+		// union field: u64 at base+8
+		binary.LittleEndian.PutUint64(buf[base+8:], uint64(attr.Value))
+		// mask: u64 at base+16
+		// e.g. if your request has 1 line and you want this attr to apply to that line:
+		mask := uint64(1) << uint(i) // or other mapping; for single line, maybe just 1
+		binary.LittleEndian.PutUint64(buf[base+16:], mask)
+	}
+
+	// Unused attributes will stay zero (since make filled buf with zeros)
+	return buf, nil
 }
 
 type gpioV2LineRequest struct {
@@ -92,6 +117,16 @@ type gpioV2LineRequest struct {
 	NumLines   uint32
 	EventBufSz uint32
 	Padding    [8]byte // to ensure proper alignment
+	FD         int32
+}
+
+type gpioV2LineRequestV2 struct {
+	Offsets    [GPIO_V2_LINES_MAX]uint32
+	Consumer   [GPIO_MAX_NAME_SIZE]byte
+	ConfigBuf  []byte // we'll handle as raw bytes
+	NumLines   uint32
+	EventBufSz uint32
+	Padding    [5]uint32 // u32 padding[5]
 	FD         int32
 }
 
@@ -167,23 +202,10 @@ func getLineValue(fd int) (uint8, error) {
 }
 
 func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (int, error) {
-	fmt.Println("gpioV2LineAttribute:", unsafe.Sizeof(gpioV2LineAttribute{})) // 8
-	fmt.Println("gpioV2LineConfig:", unsafe.Sizeof(gpioV2LineConfig{}))       // 100
-	fmt.Println("gpioV2LineRequest:", unsafe.Sizeof(gpioV2LineRequest{}))
-	var req gpioV2LineRequest
-
-	req.NumLines = 1
-	req.Offsets[0] = gpio
-	copy(req.Consumer[:], []byte(name))
-	if len(name) < len(req.Consumer) {
-		req.Consumer[len(name)] = 0 // NUL-terminate
-	}
-
-	// Prepare attributes slice
-	attrs := []gpioV2LineAttribute{
+	// Prepare attributes
+	attrs := []gpioV2LineAttributeV2{
 		{ID: GPIO_V2_LINE_ATTR_ID_FLAGS, Value: GPIO_V2_LINE_FLAG_INPUT},
 	}
-
 	var edgeVal uint32
 	switch edge {
 	case 1:
@@ -195,40 +217,74 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
+	attrs = append(attrs, gpioV2LineAttributeV2{ID: GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES /* or EDGE_ATTR_ID if exists */, Value: edgeVal})
 
-	attrs = append(attrs, gpioV2LineAttribute{
-		ID:    GPIO_V2_LINE_ATTR_ID_EDGE,
-		Value: edgeVal,
-	})
-
-	configBuf, err := buildLineConfigBuffer(attrs)
+	// Build config buffer
+	configBuf, err := buildLineConfigBufferV2(attrs)
 	if err != nil {
 		return -1, err
 	}
-	copy(req.ConfigBuf[:], configBuf)
 
-	req.EventBufSz = 0 // set to 0 unless you want event buffering
+	// Now build the raw request buffer
+	// calculate size
+	const configSize = 8 + 4 + 20 + GPIO_V2_LINE_NUM_ATTRS_MAX*24
+	// request size:
+	requestSize := GPIO_V2_LINES_MAX*4 + GPIO_MAX_NAME_SIZE + configSize + 4 + 4 + 5*4 + 4
 
-	// Zero padding for safety
-	for i := range req.Padding {
-		req.Padding[i] = 0
-	}
+	// allocate raw buffer
+	raw := make([]byte, requestSize)
 
-	fmt.Printf("%v\n", req)
-	fmt.Printf("%x\n", configBuf)
-	// Now call ioctl with pointer to req
+	offset := 0
+	// Offsets[0]
+	binary.LittleEndian.PutUint32(raw[offset:], gpio)
+	offset += GPIO_V2_LINES_MAX * 4
+
+	// Consumer (name, NUL terminated)
+	copy(raw[offset:], []byte(name))
+	// If name shorter than consumer size, NUL pad
+	// name size = GPIO_MAX_NAME_SIZE
+	offset += GPIO_MAX_NAME_SIZE
+
+	// Config struct
+	copy(raw[offset:], configBuf)
+	offset += configSize
+
+	// num_lines (u32)
+	binary.LittleEndian.PutUint32(raw[offset:], 1)
+	offset += 4
+
+	// event_buffer_size (u32)
+	binary.LittleEndian.PutUint32(raw[offset:], 0) // or non-zero if you want event buffering
+	offset += 4
+
+	// padding[5] (5 × u32) = 20 bytes
+	// raw[offset:offset+20] already zero
+	offset += 5 * 4
+
+	// fd (int32)
+	// this is an output; we don’t set before ioctl
+	offset += 4
+
+	// Now do ioctl
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		chip.Fd(),
 		uintptr(GPIO_V2_GET_LINE_IOCTL),
-		uintptr(unsafe.Pointer(&req)),
+		uintptr(unsafe.Pointer(&raw[0])),
 	)
-
 	if errno != 0 {
-		return -1, fmt.Errorf("ioctl event request failed: %d (%s)", errno, errno.Error())
+		return -1, fmt.Errorf("GPIO_V2_GET_LINE_IOCTL failed: %d (%s)", errno, errno.Error())
 	}
 
-	return int(req.FD), nil
+	// After call, raw buffer’s fd field is set by kernel: read back from the buffer
+	// extract fd from raw[offset_of_fd] (you know where that was)
+	// e.g.:
+	fdOffset := GPIO_V2_LINES_MAX*4 + GPIO_MAX_NAME_SIZE + configSize + 4 + 4 + 5*4
+	fd := int32(binary.LittleEndian.Uint32(raw[fdOffset : fdOffset+4]))
+	if fd < 0 {
+		return -1, fmt.Errorf("invalid fd returned: %d", fd)
+	}
+	return int(fd), nil
 }
 
 func waitForInterrupt(file *os.File) (uint8, error) {
