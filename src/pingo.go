@@ -3,7 +3,6 @@ package pingo
 import (
 	"errors"
 	"os"
-	"syscall"
 )
 
 const (
@@ -18,13 +17,14 @@ const (
 type Device struct {
 	chip  os.File
 	Name  string
-	lines map[int]int
+	lines map[int]Line
 }
 
 type Line struct {
 	Fd          int
 	Mode        uint32
 	isInterrupt bool
+	file        *os.File
 }
 
 func New() (Device, error) {
@@ -35,14 +35,15 @@ func New() (Device, error) {
 	}
 
 	return Device{
-		chip: *file,
-		Name: "pingo-gpio",
+		chip:  *file,
+		Name:  "pingo-gpio",
+		lines: make(map[int]Line),
 	}, nil
 }
 
 func (d *Device) ShutDown() {
-	for _, fd := range d.lines {
-		syscall.Close(fd)
+	for _, line := range d.lines {
+		line.file.Close()
 	}
 
 	d.chip.Close()
@@ -58,8 +59,10 @@ func (d *Device) ReqPin(number int, mode uint32) (Line, error) {
 	if err != nil {
 		return Line{}, nil
 	}
-	d.lines[number] = fd
-	return Line{Fd: fd, Mode: mode, isInterrupt: false}, nil
+	file := os.NewFile(uintptr(fd), "gpio")
+	line := Line{Fd: fd, Mode: mode, isInterrupt: false, file: file}
+	d.lines[number] = line
+	return line, nil
 }
 
 func (d *Device) ReqIRQ(number int, direction uint8) (Line, error) {
@@ -71,7 +74,10 @@ func (d *Device) ReqIRQ(number int, direction uint8) (Line, error) {
 	if err != nil {
 		return Line{}, err
 	}
-	return Line{Fd: fd, Mode: INPUT, isInterrupt: true}, nil
+	file := os.NewFile(uintptr(fd), "gpio")
+	line := Line{Fd: fd, Mode: INPUT, isInterrupt: true, file: file}
+	d.lines[number] = line
+	return line, nil
 }
 
 func (l Line) Set(value uint8) error {
@@ -98,7 +104,7 @@ func (l Line) Listen(quit <-chan struct{}) (<-chan uint8, error) {
 			case <-quit:
 				return
 			default:
-				edge, err := waitForInterrupt(l.Fd)
+				edge, err := waitForInterrupt(l.file)
 				if err != nil {
 					continue
 				}

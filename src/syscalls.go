@@ -132,10 +132,7 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	return int(req.FD), nil
 }
 
-func waitForInterrupt(fd int) (uint8, error) {
-	file := os.NewFile(uintptr(fd), "gpio")
-	defer file.Close()
-
+func waitForInterrupt(file *os.File) (uint8, error) {
 	var event GPIOEventData
 	err := binary.Read(file, binary.LittleEndian, &event)
 	if err != nil {
