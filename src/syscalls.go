@@ -37,6 +37,36 @@ type GPIOEventData struct {
 	_         uint32 // padding
 }
 
+type gpioV2LineAttribute struct {
+	ID    uint32
+	Value uint32
+}
+
+type gpioV2LineConfig struct {
+	Flags      uint64
+	NumAttrs   uint32
+	Padding    [4]byte
+	Attributes [10]gpioV2LineAttribute
+}
+
+type gpioV2LineRequest struct {
+	Offsets    [GPIOHANDLES_MAX]uint32
+	Consumer   [32]byte
+	Config     gpioV2LineConfig
+	NumLines   uint32
+	EventBufSz uint32
+	Padding    [4]byte
+	FD         int32
+}
+
+type gpioV2LineEvent struct {
+	Timestamp_ns uint64
+	ID           uint32
+	Seqno        uint32
+	Line_seqno   uint32
+	Padding      [4]byte
+}
+
 func requestLine(chip *os.File, gpio uint32, output bool, name string) (int, error) {
 	var req GPIOHandleRequest
 	req.LineOffsets[0] = gpio
@@ -101,27 +131,27 @@ func getLineValue(fd int) (uint8, error) {
 }
 
 func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (int, error) {
-	var req GPIOEventRequest
-	req.LineOffset = gpio
-	req.HandleFlags = GPIOHANDLE_REQUEST_INPUT
+	var req gpioV2LineRequest
+	req.NumLines = 1
+	req.Offsets[0] = gpio
+	copy(req.Consumer[:], []byte(name))
+	req.Config.Flags = GPIOHANDLE_REQUEST_INPUT
 
 	switch edge {
 	case 1:
-		req.EventFlags = GPIOEVENT_REQUEST_RISING_EDGE
+		req.Config.Flags |= GPIOEVENT_REQUEST_RISING_EDGE
 	case 2:
-		req.EventFlags = GPIOEVENT_REQUEST_FALLING_EDGE
+		req.Config.Flags |= GPIOEVENT_REQUEST_FALLING_EDGE
 	case 3:
-		req.EventFlags = GPIOEVENT_REQUEST_BOTH_EDGES
+		req.Config.Flags |= GPIOEVENT_REQUEST_BOTH_EDGES
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
 
-	copy(req.ConsumerLabel[:], []byte(name))
-
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
 		chip.Fd(),
-		uintptr(GPIO_GET_LINEEVENT_IOCTL),
+		uintptr(GPIO_V2_GET_LINE_IOCTL),
 		uintptr(unsafe.Pointer(&req)),
 	)
 
@@ -133,16 +163,16 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 }
 
 func waitForInterrupt(file *os.File) (uint8, error) {
-	var event GPIOEventData
+	var event gpioV2LineEvent
 	err := binary.Read(file, binary.LittleEndian, &event)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read event: %v", err)
 	}
 
 	switch event.ID {
-	case GPIOEVENT_EVENT_RISING_EDGE:
+	case GPIO_V2_LINE_EVENT_RISING_EDGE:
 		return 1, nil
-	case GPIOEVENT_EVENT_FALLING_EDGE:
+	case GPIO_V2_LINE_EVENT_FALLING_EDGE:
 		return 2, nil
 	default:
 		return 3, nil
