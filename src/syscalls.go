@@ -214,6 +214,8 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 		req.Padding[i] = 0
 	}
 
+	fmt.Printf("%v\n", req)
+	fmt.Printf("%v\n", configBuf)
 	// Now call ioctl with pointer to req
 	_, _, errno := syscall.Syscall(
 		syscall.SYS_IOCTL,
