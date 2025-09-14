@@ -2,8 +2,6 @@ package main
 
 import (
 	"log"
-	"os"
-	"syscall"
 	"time"
 
 	pingo "github.com/michaeljoyner/pingo/src"
@@ -16,19 +14,16 @@ func main() {
 	}
 	defer dev.ShutDown()
 
-	// BCM GPIO 17
-	gpioNum := uint32(17)
-	fd, err := pingo.RequestLine(chip, gpioNum, true)
+	light, err := dev.ReqPin(17, pingo.OUTPUT)
 	if err != nil {
-		log.Fatalf("Failed to request GPIO line: %v", err)
+		log.Fatal(err)
 	}
-	defer syscall.Close(fd)
 
 	// Toggle pin
 	for range 10 {
-		pingo.SetLineValue(fd, 1)
+		light.Set(1)
 		time.Sleep(500 * time.Millisecond)
-		pingo.SetLineValue(fd, 0)
+		light.Set(0)
 		time.Sleep(500 * time.Millisecond)
 	}
 }
