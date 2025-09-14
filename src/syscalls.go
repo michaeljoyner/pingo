@@ -28,6 +28,7 @@ type GPIOEventRequest struct {
 	EventFlags    uint32
 	ConsumerLabel [32]byte
 	FD            int32
+	_             [4]byte
 }
 
 type GPIOEventData struct {
