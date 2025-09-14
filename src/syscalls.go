@@ -135,15 +135,15 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	req.NumLines = 1
 	req.Offsets[0] = gpio
 	copy(req.Consumer[:], []byte(name))
-	req.Config.Flags = GPIOHANDLE_REQUEST_INPUT
+	req.Config.Flags = GPIO_V2_LINE_FLAG_INPUT
 
 	switch edge {
 	case 1:
-		req.Config.Flags |= GPIOEVENT_REQUEST_RISING_EDGE
+		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_RISING
 	case 2:
-		req.Config.Flags |= GPIOEVENT_REQUEST_FALLING_EDGE
+		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_FALLING
 	case 3:
-		req.Config.Flags |= GPIOEVENT_REQUEST_BOTH_EDGES
+		req.Config.Flags |= GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING
 	default:
 		return -1, fmt.Errorf("invalid edge: %d", edge)
 	}
