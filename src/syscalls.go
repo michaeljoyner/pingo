@@ -46,32 +46,25 @@ func buildLineConfigBuffer(attrs []gpioV2LineAttribute) ([]byte, error) {
 	const size = 100
 	buf := make([]byte, size)
 
-	// Example Flags: input flag must be set somewhere else
-
-	// Flags field - 8 bytes at offset 0
-	var flags uint64 = 0 // set flags later
+	var flags uint64 = GPIO_V2_LINE_FLAG_INPUT
 	binary.LittleEndian.PutUint64(buf[0:], flags)
 
-	// NumAttrs field - 4 bytes at offset 8
 	numAttrs := uint32(len(attrs))
 	binary.LittleEndian.PutUint32(buf[8:], numAttrs)
 
-	// Padding 4 bytes at offset 12 - zero
+	// zero padding
 	for i := 12; i < 16; i++ {
 		buf[i] = 0
 	}
 
-	// Attributes: 10 * 8 bytes starting at offset 16
 	for i, attr := range attrs {
 		if i >= 10 {
-			return nil, fmt.Errorf("too many attributes, max 10")
+			return nil, fmt.Errorf("too many attributes")
 		}
 		offset := 16 + i*8
 		binary.LittleEndian.PutUint32(buf[offset:], attr.ID)
 		binary.LittleEndian.PutUint32(buf[offset+4:], attr.Value)
 	}
-
-	// Zero remaining bytes (if any) after attributes - buffer is already zero initialized
 
 	return buf, nil
 }
@@ -182,6 +175,9 @@ func requestInterruptLine(chip *os.File, gpio uint32, edge uint8, name string) (
 	req.NumLines = 1
 	req.Offsets[0] = gpio
 	copy(req.Consumer[:], []byte(name))
+	if len(name) < len(req.Consumer) {
+		req.Consumer[len(name)] = 0 // NUL-terminate
+	}
 
 	// Prepare attributes slice
 	attrs := []gpioV2LineAttribute{
